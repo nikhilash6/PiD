@@ -32,10 +32,11 @@ dependencies:
       #      Bump only after re-testing from_ldm_siglip end-to-end. ----
       - diffusers>=0.37.0
       - transformers==4.57.1
-      # huggingface-hub>=1.0 is needed for the new `hf` CLI (used by the
-      # checkpoint-download instructions in the README). Older versions only
-      # ship the deprecated `huggingface-cli` entry point.
-      - huggingface-hub>=1.0
+      # Do NOT pin huggingface-hub here. transformers 4.57.1 caps it at <1.0,
+      # so a `huggingface-hub>=1.0` pin will hard-conflict and abort
+      # `conda env create`. The version transformers pulls in (0.36.x) already
+      # ships the `hf` CLI used by the checkpoint-download instructions —
+      # `huggingface-cli` was only deprecated, not removed, until 1.0.
       - safetensors
       # sentencepiece is required for the T5 tokenizer that ships with the
       # flux/flux2/sd3/zimage diffusers pipelines (tokenizer_2). Without it,
