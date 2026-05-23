@@ -4,10 +4,23 @@
   <img src="figures/teaser.jpg" alt="PiD teaser" width="100%">
 </p>
 
+https://github.com/user-attachments/assets/e8a3e882-7a49-4867-b3f3-c3dee3c54c4f
+
+
 PiD reformulates the latent-to-pixel decoder as a conditional pixel-space diffusion
 model, unifying decoding and upsampling into a single generative module.
 It directly denoises in high-resolution pixel
 space and produces a super-resolved image in one pass.
+
+**[Paper](), [Project Page](https://research.nvidia.com/labs/sil/projects/pid/), [Model Weights](https://huggingface.co/nvidia/PiD)**
+
+[Yifan Lu](https://yifanlu0227.github.io/),
+[Qi Wu](https://wilsoncernwq.github.io/),
+[Jay Zhangjie Wu](https://zhangjiewu.github.io/),
+[Zian Wang](https://www.cs.toronto.edu/~zianwang/),
+[Huan Ling](https://www.cs.toronto.edu/~linghuan/),
+[Sanja Fidler](https://www.cs.utoronto.ca/~fidler/),
+[Xuanchi Ren](https://xuanchiren.com/) <br>
 
 ## Installation
 
