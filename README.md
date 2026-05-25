@@ -230,7 +230,8 @@ and the DCO sign-off requirement.
 
 ## Acknowledgments
 
-The authors would like to thank Product Managers Aditya Mahajan and Matt Cragun for their valuable guidance and support.
+The authors would like to acknowledge [Yongsheng Yu](https://www.yongshengyu.com/) and [Wei Xiong](https://wxiong.me/) for open-sourcing [PixelDiT](https://pixeldit.github.io/)'s model and weights, and thank Product Managers [Aditya Mahajan](https://www.linkedin.com/in/aditya-mahajan1) and [Matt Cragun](https://www.linkedin.com/in/mcragun/) for their valuable support and guidance.
+
 
 ## Citation
 
