@@ -34,6 +34,8 @@ def load_our_decoder(args, experiment_opts: list, is_rank0: bool):
         load_ema_to_reg=args.load_ema_to_reg,
     )
     model.eval()
+    if getattr(args, "compile", False):
+        model.enable_compile()
     return model
 
 

@@ -103,6 +103,13 @@ def _add_common_decoder_args(parser: argparse.ArgumentParser, default_output_sub
     )
     parser.add_argument("--shift", type=float, default=None, help="Our pixel decoder flow shift")
     parser.add_argument("--scale", type=int, default=4, help="Our decoder upscale factor (output = baseline * scale)")
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="torch.compile the pixel decoder net for faster inference. Compiles once per "
+        "output resolution (first call is slow). Standard SR path only (no context-parallel / "
+        "encoder-decoder).",
+    )
 
     # Output / S3 (common)
     parser.add_argument(

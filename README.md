@@ -159,20 +159,22 @@ PYTHONPATH=. python -m pid._src.inference.from_ldm --backbone flux \
     --output_dir ./results/official_demo/flux_4k_ar4_3
 ```
 
-#### Example 3 — Multi-GPU with a prompt file (Z-Image)
+#### Example 3 — Multi-GPU with a prompt file (Z-Image) with torch.compile
 
 `torchrun` shards `--prompt_file` across ranks; each rank writes to
-`--output_dir` independently.
+`--output_dir` independently. We use `--compile` to enable torch.compile for faster inference, however,
+the first call will be slow due to the compilation. We use `default` mode, to get further speedup, change to the mode to `max-autotune` in `_maybe_compile_net (pid/_src/models/pixeldit_model.py:210)`.
 
 ```bash
 PYTHONPATH=. torchrun --nproc_per_node=4 \
     -m pid._src.inference.from_ldm --backbone zimage \
     --prompt_file pid/_src/inference/prompts/prompt_creative.txt \
     --ldm_inference_steps 50 --save_xt_steps 46 \
+    --compile \
     --output_dir ./results/official_demo/zimage
 ```
 
-#### Example 4 — Multi-GPU, 1K → 4K decode (Z-Image-Turbo, `2kto4k` decoder)
+#### Example 4 — Multi-GPU, 4K decode (Z-Image-Turbo, `2kto4k` decoder)
 
 Z-Image-Turbo defaults to 9 diffusers steps with `guidance_scale=0.0`. The final
 clean latent `x0` is always saved and is the recommended Turbo output to inspect.

@@ -118,12 +118,13 @@ class PidDistillModel(PidModel):
         lq_latent: Optional[torch.Tensor],
         degrade_sigma_tensor: Optional[torch.Tensor],
         generator: Optional[torch.Generator] = None,
+        net=None,
     ) -> torch.Tensor:
         B = noise.shape[0]
         timescale = self.fm_trainer.timescale
         autocast_ctx = torch.autocast("cuda", dtype=self.autocast_dtype) if self.autocast_dtype else nullcontext()
         x = noise
-        net = self.net
+        net = net if net is not None else self.net
 
         with autocast_ctx:
             for t_cur, t_next in zip(t_list[:-1], t_list[1:]):
@@ -248,8 +249,11 @@ class PidDistillModel(PidModel):
         noise = torch.randn(B, 3, img_h, img_w, device="cuda", generator=gen)
 
         autocast_ctx = torch.autocast("cuda", dtype=self.autocast_dtype) if self.autocast_dtype else nullcontext()
-        net = self.net
-        net.eval()
+        self.net.eval()
+        # Select the net to run: a torch.compile-wrapped net (built/cached per output
+        # resolution) when --compile is armed, else the eager net.
+        text_len = min(caption_embs.shape[1], self.net.txt_max_length)
+        net = self._maybe_compile_net(img_h, img_w, text_len)
 
         effective_steps = num_steps if num_steps is not None else self.config.student_sample_steps
 
@@ -276,6 +280,7 @@ class PidDistillModel(PidModel):
                 lq_latent,
                 degrade_sigma_tensor,
                 generator=gen,
+                net=net,
             )
 
         return x0_student.clamp(-1, 1).unsqueeze(2)

@@ -10,7 +10,6 @@
 import math
 from typing import Optional, Tuple
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,15 +29,15 @@ def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=
     return:
     pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
     """
-    grid_h = np.arange(grid_size, dtype=np.float32)
-    grid_w = np.arange(grid_size, dtype=np.float32)
-    grid = np.meshgrid(grid_w, grid_h)  # here w goes first
-    grid = np.stack(grid, axis=0)
+    grid_h = torch.arange(grid_size, dtype=torch.float32)
+    grid_w = torch.arange(grid_size, dtype=torch.float32)
+    grid = torch.meshgrid(grid_w, grid_h, indexing="xy")  # here w goes first
+    grid = torch.stack(grid, dim=0)
 
-    grid = grid.reshape([2, 1, grid_size, grid_size])
+    grid = grid.reshape(2, 1, grid_size, grid_size)
     pos_embed = get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
     if cls_token and extra_tokens > 0:
-        pos_embed = np.concatenate([np.zeros([extra_tokens, embed_dim]), pos_embed], axis=0)
+        pos_embed = torch.cat([torch.zeros(extra_tokens, embed_dim), pos_embed], dim=0)
     return pos_embed
 
 
@@ -48,28 +47,33 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
     emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
 
-    emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
+    emb = torch.cat([emb_h, emb_w], dim=1)  # (H*W, D)
     return emb
 
 
 def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     """
     embed_dim: output dimension for each position
-    pos: a list of positions to be encoded: size (M,)
+    pos: a tensor of positions to be encoded: size (M,)
     out: (M, D)
+
+    Pure-torch port of the original numpy implementation (float64 intermediate for
+    bit-for-bit parity with the released checkpoints). Stays traceable by torch.compile.
     """
     assert embed_dim % 2 == 0
-    omega = np.arange(embed_dim // 2, dtype=np.float64)
+    if not torch.is_tensor(pos):
+        pos = torch.as_tensor(pos)
+    omega = torch.arange(embed_dim // 2, dtype=torch.float64)
     omega /= embed_dim / 2.0
     omega = 1.0 / 10000**omega  # (D/2,)
 
-    pos = pos.reshape(-1)  # (M,)
-    out = np.einsum("m,d->md", pos, omega)  # (M, D/2), outer product
+    pos = pos.reshape(-1).to(torch.float64)  # (M,)
+    out = torch.outer(pos, omega)  # (M, D/2), outer product
 
-    emb_sin = np.sin(out)  # (M, D/2)
-    emb_cos = np.cos(out)  # (M, D/2)
+    emb_sin = torch.sin(out)  # (M, D/2)
+    emb_cos = torch.cos(out)  # (M, D/2)
 
-    emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
+    emb = torch.cat([emb_sin, emb_cos], dim=1)  # (M, D)
     return emb
 
 
@@ -135,6 +139,19 @@ class FeedForward(nn.Module):
         return x
 
 
+def _interleave_cos_sin(x_freqs: torch.Tensor, y_freqs: torch.Tensor) -> torch.Tensor:
+    """Pack per-axis rotation angles into a real (cos, sin) RoPE tensor.
+
+    Returns `[N, (dim//4)*2, 2]` where `[..., 0]`/`[..., 1]` are cos/sin and the
+    x/y axes are interleaved (element 2j = x-axis, 2j+1 = y-axis), matching the
+    layout `apply_rotary_emb` pairs with the (real, imag) halves of q/k. This is
+    the real-valued equivalent of the old `torch.polar` complex representation —
+    same math, but traceable by torch.compile (Dynamo can't handle complex ops).
+    """
+    angles = torch.stack([x_freqs, y_freqs], dim=-1).reshape(x_freqs.shape[0], -1)
+    return torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
+
+
 def precompute_freqs_cis_2d(dim: int, height: int, width: int, theta: float = 10000.0, scale=16.0):
     x_pos = torch.linspace(0, scale, width)
     y_pos = torch.linspace(0, scale, height)
@@ -144,11 +161,7 @@ def precompute_freqs_cis_2d(dim: int, height: int, width: int, theta: float = 10
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 4)[: (dim // 4)].float() / dim))
     x_freqs = torch.outer(x_pos, freqs).float()
     y_freqs = torch.outer(y_pos, freqs).float()
-    x_cis = torch.polar(torch.ones_like(x_freqs), x_freqs)
-    y_cis = torch.polar(torch.ones_like(y_freqs), y_freqs)
-    freqs_cis = torch.cat([x_cis.unsqueeze(dim=-1), y_cis.unsqueeze(dim=-1)], dim=-1)
-    freqs_cis = freqs_cis.reshape(height * width, -1)
-    return freqs_cis
+    return _interleave_cos_sin(x_freqs, y_freqs)
 
 
 def precompute_freqs_cis_2d_ntk(
@@ -186,11 +199,7 @@ def precompute_freqs_cis_2d_ntk(
 
     x_freqs = torch.outer(x_pos, freqs_w).float()
     y_freqs = torch.outer(y_pos, freqs_h).float()
-    x_cis = torch.polar(torch.ones_like(x_freqs), x_freqs)
-    y_cis = torch.polar(torch.ones_like(y_freqs), y_freqs)
-    freqs_cis = torch.cat([x_cis.unsqueeze(dim=-1), y_cis.unsqueeze(dim=-1)], dim=-1)
-    freqs_cis = freqs_cis.reshape(height * width, -1)
-    return freqs_cis
+    return _interleave_cos_sin(x_freqs, y_freqs)
 
 
 def apply_rotary_emb(
@@ -198,12 +207,19 @@ def apply_rotary_emb(
     xk: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    freqs_cis = freqs_cis[None, :, None, :]
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
+    # freqs_cis: real (cos, sin) tensor [N, head_dim//2, 2] (see `_interleave_cos_sin`).
+    # Apply RoPE as an explicit 2x2 rotation on each (real, imag) pair of q/k —
+    # bit-equivalent to the old complex multiply, but traceable by torch.compile.
+    cos = freqs_cis[None, :, None, :, 0]  # [1, N, 1, head_dim//2]
+    sin = freqs_cis[None, :, None, :, 1]
+
+    def _rotate(x: torch.Tensor) -> torch.Tensor:
+        x_ = x.float().reshape(*x.shape[:-1], -1, 2)
+        x_r, x_i = x_[..., 0], x_[..., 1]
+        out = torch.stack([x_r * cos - x_i * sin, x_r * sin + x_i * cos], dim=-1).flatten(-2)
+        return out.type_as(x)
+
+    return _rotate(xq), _rotate(xk)
 
 
 class RotaryAttention(nn.Module):
@@ -257,7 +273,7 @@ class RotaryAttention(nn.Module):
             assert N_full % cp_size == 0, f"pos length {N_full} not divisible by cp_size {cp_size}"
             N_local = N_full // cp_size
             assert N == N_local, f"local x length {N} != expected {N_local}"
-            pos_local = pos.view(cp_size, N_local, -1)[cp_rank]
+            pos_local = pos.view(cp_size, N_local, *pos.shape[1:])[cp_rank]
             # Apply RoPE to local q with local pos.
             q, _ = apply_rotary_emb(q, q, freqs_cis=pos_local)
             # Gather k, v across CP ranks along the sequence dim, then RoPE with full pos.
@@ -345,35 +361,26 @@ class PixelTokenEmbedder(nn.Module):
         if key in self._pos_cache:
             pe = self._pos_cache[key]
             return pe.to(device=device, dtype=dtype)
-        pos_np = get_2d_sincos_pos_embed(self.hidden_size_output, patch_size)
-        pos = torch.from_numpy(pos_np).to(device=device, dtype=dtype)  # [P2, D]
+        pos = get_2d_sincos_pos_embed(self.hidden_size_output, patch_size).to(device=device, dtype=dtype)  # [P2, D]
         self._pos_cache[key] = pos
         return pos
 
     def _fetch_pixel_pos_image(self, height: int, width: int, device, dtype):
+        key = ("image", height, width)
+        if key in self._pos_cache:
+            pe = self._pos_cache[key]
+            return pe.to(device=device, dtype=dtype)
         if height == width:
-            key = ("image", height, width)
-            if key in self._pos_cache:
-                pe = self._pos_cache[key]
-                return pe.to(device=device, dtype=dtype)
-            pos_np = get_2d_sincos_pos_embed(self.hidden_size_output, height)
-            pos = torch.from_numpy(pos_np).to(device=device, dtype=dtype)  # [H*W, D]
-            self._pos_cache[key] = pos
-            return pos
+            pos = get_2d_sincos_pos_embed(self.hidden_size_output, height).to(device=device, dtype=dtype)  # [H*W, D]
         else:
-            key = ("image", height, width)
-            if key in self._pos_cache:
-                pe = self._pos_cache[key]
-                return pe.to(device=device, dtype=dtype)
-            # Build a non-square grid (H x W) and compute 2D sin/cos embedding
-            grid_h = np.arange(height, dtype=np.float32)
-            grid_w = np.arange(width, dtype=np.float32)
-            grid = np.meshgrid(grid_w, grid_h)  # w first to match existing convention
-            grid = np.stack(grid, axis=0).reshape(2, 1, height, width)
-            pos_np = get_2d_sincos_pos_embed_from_grid(self.hidden_size_output, grid)
-            pos = torch.from_numpy(pos_np).to(device=device, dtype=dtype)  # [H*W, D]
-            self._pos_cache[key] = pos
-            return pos
+            # Build a non-square grid (H x W) and compute 2D sin/cos embedding.
+            grid_h = torch.arange(height, dtype=torch.float32)
+            grid_w = torch.arange(width, dtype=torch.float32)
+            grid = torch.meshgrid(grid_w, grid_h, indexing="xy")  # w first to match existing convention
+            grid = torch.stack(grid, dim=0).reshape(2, 1, height, width)
+            pos = get_2d_sincos_pos_embed_from_grid(self.hidden_size_output, grid).to(device=device, dtype=dtype)
+        self._pos_cache[key] = pos
+        return pos
 
     def forward(self, inputs: torch.Tensor, img_height: int = None, img_width: int = None, patch_size: int = None):
         # Two modes:
@@ -586,7 +593,7 @@ class MMDiTJointAttention(nn.Module):
             assert Nx_full % cp_size == 0, f"pos_img length {Nx_full} not divisible by cp_size {cp_size}"
             Nx_local = Nx_full // cp_size
             assert Nx == Nx_local, f"local image stream length {Nx} != expected {Nx_local}"
-            pos_img_local = pos_img.view(cp_size, Nx_local, -1)[cp_rank]
+            pos_img_local = pos_img.view(cp_size, Nx_local, *pos_img.shape[1:])[cp_rank]
             qx, _ = apply_rotary_emb(qx, qx, freqs_cis=pos_img_local)
             # `all_gather` requires contiguous tensors; the qkv permute leaves k/v as non-contiguous views.
             kx = cat_outputs_cp_with_grad(kx.contiguous(), seq_dim=1, cp_group=self._cp_group)
@@ -1291,15 +1298,35 @@ class PixDiT_T2I(nn.Module):
     def fetch_pos_text(self, length, device):
         if length in self.precompute_pos_txt:
             return self.precompute_pos_txt[length].to(device)
-        # Build 1D RoPE freqs for text stream using the same per-head dim as image
+        # Build 1D RoPE freqs for text stream using the same per-head dim as image.
         head_dim = self.hidden_size // self.num_groups
-        # Create frequencies for complex rotation: [length, head_dim//2]
         freqs = 1.0 / (self.text_rope_theta ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim))
         positions = torch.arange(0, length, device=device).float().unsqueeze(1)  # [length,1]
         angles = positions * freqs.unsqueeze(0)  # [length, head_dim//2]
-        freqs_cis = torch.polar(torch.ones_like(angles), angles)  # complex64/complex32
+        # Real (cos, sin) layout [length, head_dim//2, 2] consumed by `apply_rotary_emb`.
+        freqs_cis = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
         self.precompute_pos_txt[length] = freqs_cis
         return freqs_cis
+
+    @torch.no_grad()
+    def precompute_positional_caches(self, image_height, image_width, text_length, device=None, pixel_dtype=None):
+        """Eagerly warm every positional cache for a fixed (H, W, text_length).
+
+        Called once before `torch.compile` so the compiled `forward` only ever hits
+        the cache-return branch — no RoPE/sincos recompute and no dict mutation inside
+        the traced graph (both would otherwise force graph breaks). Standard SR path
+        only (no encoder-decoder / token-shuffle).
+        """
+        device = device or next(self.parameters()).device
+        if pixel_dtype is None:
+            pixel_dtype = next(self.parameters()).dtype
+        Hs, Ws = image_height // self.patch_size, image_width // self.patch_size
+        self.fetch_pos(Hs, Ws, device)
+        if self.use_text_rope:
+            self.fetch_pos_text(text_length, device)
+        self.pixel_embedder._fetch_pixel_pos_image(image_height, image_width, device, pixel_dtype)
+        for blk in self.pixel_blocks:
+            blk._fetch_pos(Hs, Ws, device)
 
     def initialize_weights(self):
         # Initialize s_embedder like nn.Linear

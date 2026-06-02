@@ -166,6 +166,49 @@ class PixelDiTModel(ImaginaireModel):
         self.conditioner = lazy_instantiate(config.conditioner)
         logger.info(f"PixelDiT conditioner: {self.conditioner}")
 
+        # torch.compile state (opt-in via `enable_compile`). One compiled net per
+        # distinct (H, W) since image shapes vary per-sample but text length is fixed.
+        self._compile_enabled = False
+        self._compiled_nets: dict = {}
+
+    # ---------------------------------------------------------------------
+    # torch.compile (opt-in via --compile)
+    # ---------------------------------------------------------------------
+
+    def enable_compile(self) -> None:
+        """Arm torch.compile for `self.net`. Actual compilation is lazy, on the first
+        `generate_samples_from_batch` call once the output (H, W) is known (see
+        `_maybe_compile_net`). Standard SR path only — context-parallel and the
+        encoder-decoder path are not supported under compile."""
+        assert not getattr(self.net, "is_context_parallel_enabled", False) and self.net._cp_group is None, (
+            "--compile is incompatible with context parallel; disable CP first."
+        )
+        assert not getattr(self.net, "use_ed", False), "--compile does not support the encoder-decoder net path."
+        self._compile_enabled = True
+        logger.info("PixelDiTModel: torch.compile armed (lazy, per output resolution).")
+
+    def _maybe_compile_net(self, image_h: int, image_w: int, text_len: int):
+        """Return the net to run for this shape: a torch.compile-wrapped net when
+        `--compile` is on (compiled once per (H, W) and cached), else the eager net."""
+        if not self._compile_enabled:
+            return self.net
+        key = (int(image_h), int(image_w))
+        compiled = self._compiled_nets.get(key)
+        if compiled is None:
+            logger.info(f"--compile: warming positional caches + compiling net for {image_h}x{image_w}")
+            self.net.precompute_positional_caches(
+                image_height=image_h,
+                image_width=image_w,
+                text_length=text_len,
+                device="cuda",
+                pixel_dtype=self.precision,
+            )
+            # mode="default": fast compile, solid speedup. For more inference throughput
+            # at the cost of a much slower first compile, switch to "max-autotune".
+            compiled = torch.compile(self.net, mode="default", dynamic=False)
+            self._compiled_nets[key] = compiled
+        return compiled
+
     # ---------------------------------------------------------------------
     # Text encoding
     # ---------------------------------------------------------------------
