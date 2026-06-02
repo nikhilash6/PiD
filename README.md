@@ -25,8 +25,8 @@ space and produces a super-resolved image in one pass.
 
 ## News
 - 🔥 [June 2, 2026] PiD checkpoints for **SDXL**, **Qwen-Image** and **Qwen-Image-2512** are released. Check [HuggingFace](https://huggingface.co/nvidia/PiD).
-- 🔥 [June 2, 2026] A new checkpoint for **FLUX.2 (2kto4k)** (with `_2606` suffix) that has no color drifting issue is released. See [here](docs/FLUX2_2kto4k_new_ckpt_compare.md) for comparison with the old one.
-- 🔥 [June 2, 2026] We clean up the codebase and remove useless code.
+- 🔥 [June 2, 2026] A new checkpoint for **FLUX.2 (2kto4k)** (with `_2606` suffix) that has no color drifting issue. See [here](docs/FLUX2_2kto4k_new_ckpt_compare.md) for comparison with the old one.
+- 🔥 [June 2, 2026] We clean up the codebase and remove useless code. Torch.compile mode is also available now.
 - 🚀 [May 27, 2026] PiD is now in [ComfyUI](https://github.com/Comfy-Org/ComfyUI/pull/14103)!
 - 🚀 [May 25, 2026] Paper, code, and model weights released, with PiD options for **FLUX**, **FLUX.2**, **Z-Image**, **Z-Image-Turbo**, **SD3**, **DINOv2**, and **SigLIP**.
 - 🔜 [Coming Soon] PiD undistilled checkpoints.
@@ -57,19 +57,10 @@ conda activate pid
 pip install -e .
 ```
 
-## Checkpoints and assets
+### Download Checkpoints
 
-Pretrained PiD checkpoints live under `checkpoints/`. Each diffusers backbone ships
-two variants — the original `2k` decoder (trained at 2048px) and a `2kto4k` decoder
-(trained with multi-resolution data bucketing from 2048 to 4096 + an SD3-style dynamic
-shift, intended for 1024 LDM → 4K decoding). Pick the variant at the CLI via
-`--pid_ckpt_type {2k,2kto4k}` (default: `2k`).
-
-### Downloading
-
-The released decoder weights and the encoder/decoder ("VAE") weights they
-depend on are hosted at [`nvidia/PiD`](https://huggingface.co/nvidia/PiD) on
-the Hugging Face Hub. Pull just the `checkpoints/` tree into this repo:
+Checkpoints are hosted at [`nvidia/PiD`](https://huggingface.co/nvidia/PiD) on the HuggingFace.
+Pull the `checkpoints/` folder into this repo:
 
 ```bash
 hf download nvidia/PiD --local-dir . --include "checkpoints/*"
@@ -81,11 +72,6 @@ PiD ships two complementary entry points, each selecting a backbone with `--back
 
 - `from_ldm.py`  — text/class → latent diffusion → PiD decode
 - `from_clean.py` — image → VAE encode → PiD decode
-
-Both entry points live under `pid/_src/inference/` and decode each captured latent
-twice — once with the backbone's native VAE/RAE decoder (baseline) and once with PiD.
-The `dinov2` and `siglip` backbones are the upstream RAE (DINOv2 encoder) and Scale-RAE
-(SigLIP-2 encoder) models.
 
 > [!IMPORTANT]
 > Picking the checkpoint variant — `--pid_ckpt_type`
@@ -116,19 +102,9 @@ For the exact checkpoint path behind each `(backbone, --pid_ckpt_type)`, see [do
 
 ### 📕 `from_ldm`: text / class → latent diffusion → PiD decode
 
-Runs the chosen `--backbone` on a prompt (or class id for the class-conditional `dinov2`
-backbone), captures the intermediate `x_t` at user-specified denoising steps (early LDM
+Runs the chosen `--backbone` on a prompt, captures the intermediate `x_t` at user-specified denoising steps (early LDM
 termination) and the final clean `x_0`, then decodes each captured latent with both the
 native VAE / RAE decoder (baseline) and PiD.
-
-For `flux` / `flux2` / `flux2-klein-4b` / `flux2-klein-9b` / `sd3` / `sdxl` / `qwenimage` /
-`qwenimage-2512` / `zimage` / `zimage-turbo` the LDM is a HuggingFace `diffusers` pipeline
-(`FluxPipeline`, `Flux2Pipeline`, `Flux2KleinPipeline`, `StableDiffusion3Pipeline`,
-`StableDiffusionXLPipeline`, `QwenImagePipeline`, `ZImagePipeline`). `qwenimage-2512` is the
-Dec-2025 Qwen-Image refresh (same VAE + PiD student as `qwenimage`, different transformer);
-`flux2-klein-4b` / `flux2-klein-9b` are the distilled FLUX.2-klein models (`Flux2KleinPipeline`
-/ `FLUX.2-klein-4B` | `-9B`, same Flux2 VAE + PiD student as `flux2`, different transformer;
-4 steps + guidance 1.0 per the model cards).
 
 For `dinov2` and `siglip` the LDM is the upstream
 [RAE](https://github.com/bytetriper/RAE) (class-conditional ImageNet-512) or
@@ -240,19 +216,6 @@ The `dinov2` / `siglip` `from_clean` flows take the same flags but with a differ
 `--scale` (8 for `siglip`); their encoders resize internally to their fixed native
 interface (512 / 256) regardless of the input image size — see
 [`docs/dinov2_siglip.md`](docs/dinov2_siglip.md).
-
-### Common arguments
-
-| Flag | Meaning |
-|------|---------|
-| `--pid_inference_steps`| Number of denoising steps for PiD (4 for the released distilled checkpoints) |
-| `--scale`              | PiD upscale factor (output = `baseline * scale`); 8 for Scale-RAE and 4 for other backbones |
-| `--cfg_scale`          | Classifier-free guidance scale for PiD |
-| `--output_dir`         | Where to write the side-by-side comparison images |
-| `--seed`               | Base random seed |
-
-Multi-GPU runs use `torchrun --nproc_per_node=N`; each rank processes a shard
-of the prompts / manifest entries and writes to `--output_dir` independently.
 
 ## Repository layout
 
