@@ -1,6 +1,6 @@
 # Boogu-Image Optional Setup
 
-https://github.com/user-attachments/assets/48b6f4b9-a6d3-41d1-82ba-b7f25453ec6c
+https://github.com/user-attachments/assets/6c71f437-5ded-4281-af9a-8d388dcf2e1c
 
 `from_boogu.py` is an optional integration for
 [Boogu-Image](https://github.com/boogu-project/Boogu-Image). It is intentionally
